@@ -77,6 +77,11 @@ private:
     // Sample types per output channel (queried after createBuffers)
     ASIOSampleType m_outType[PROXY_MAX_OUT];
 
+    // outputReady() support — if the DAW uses outputReady(), we defer
+    // ring writes until outputReady() is called instead of bufferSwitch
+    bool m_dawUsesOutputReady = false;
+    long m_pendingIndex       = -1;  // buffer index to write when outputReady fires
+
     // DAW's original callbacks (saved so we can call through)
     ASIOCallbacks m_dawCallbacks;
 

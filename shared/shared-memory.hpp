@@ -7,15 +7,18 @@
 #define DAW_CAPTURE_EVENT_NAME L"Local\\OBSDAWCapture_NewData"
 
 // Ring buffer — power-of-two so frame index wraps with a cheap & mask
-// 16384 frames @ 48kHz = ~341ms total; target read lag is only ~40ms
-static constexpr uint32_t RING_FRAMES        = 16384; // 2^14
-static constexpr uint32_t DAW_MAX_CHANNELS   = 8;     // avoid conflict with mmreg.h MAX_CHANNELS
+// 131072 frames = ~2.7s @ 48kHz, ~680ms @ 192kHz — safe at all standard rates
+static constexpr uint32_t RING_FRAMES        = 131072; // 2^17
+static constexpr uint32_t DAW_MAX_CHANNELS   = 8;      // avoid conflict with mmreg.h MAX_CHANNELS
 
-// OBS reads this many frames per callback (~40ms @ 48kHz, ~46ms @ 44100)
-static constexpr uint32_t READ_CHUNK_FRAMES  = 2048;
+// OBS reads this many frames per chunk (~10ms @ 48kHz)
+// Smaller chunks = more responsive with tiny ASIO buffers (32-64 frames)
+static constexpr uint32_t READ_CHUNK_FRAMES  = 512;
 
-// OBS read pointer stays this many frames behind the write pointer (~40ms)
-static constexpr uint32_t TARGET_LAG_FRAMES  = 2048;
+// Target lag in milliseconds — converted to frames at runtime based on sample rate.
+// This keeps the delay consistent (~40ms) regardless of whether the DAW runs
+// at 44.1kHz, 48kHz, 88.2kHz, 96kHz, or 192kHz.
+static constexpr uint32_t TARGET_LAG_MS      = 40;
 
 // Written by the proxy (inside DAW process), read by OBS plugin
 #pragma pack(push, 1)
@@ -38,4 +41,4 @@ struct DAWCaptureShm {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(DAWCaptureShm) <= 6 * 1024 * 1024, "SHM too large");
+static_assert(sizeof(DAWCaptureShm) <= 8 * 1024 * 1024, "SHM exceeds 8MB — reduce RING_FRAMES or DAW_MAX_CHANNELS");

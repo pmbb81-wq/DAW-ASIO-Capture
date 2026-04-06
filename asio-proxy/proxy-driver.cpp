@@ -6,7 +6,7 @@
 #include "proxy-driver.hpp"
 
 // ---- DIAGNOSTIC AUDIO LOGGING — flip to 0 to remove ----
-#define PROXY_DEBUG_AUDIO_LOG 0
+#define PROXY_DEBUG_AUDIO_LOG 1
 // ---------------------------------------------------------
 
 // Simple append-log shared across this TU
@@ -128,7 +128,20 @@ ASIOError ProxyASIODriver::controlPanel()
 ASIOError ProxyASIODriver::future(long sel, void *opt)
     { return m_real->future(sel, opt); }
 ASIOError ProxyASIODriver::outputReady()
-    { return m_real->outputReady(); }
+{
+    // If the DAW calls outputReady(), it means it fills output buffers
+    // asynchronously AFTER returning from bufferSwitch. We must wait
+    // until this call to read the output data.
+    if (!m_dawUsesOutputReady) {
+        m_dawUsesOutputReady = true;
+        ProxyLog("outputReady: DAW uses outputReady — deferring ring writes\r\n");
+    }
+    if (m_pendingIndex >= 0) {
+        writeOutputsToRing(m_pendingIndex);
+        m_pendingIndex = -1;
+    }
+    return m_real->outputReady();
+}
 
 // ---------------------------------------------------------------------------
 // createBuffers — the key interception point
@@ -175,6 +188,22 @@ ASIOError ProxyASIODriver::createBuffers(ASIOBufferInfo *infos, long numChannels
     ProxyLog("createBuffers: numChannels=%ld bufSize=%ld outChannelsFound=%ld shm=%p\r\n",
              numChannels, bufferSize, m_numOut, m_shm);
 
+    // Log full channel layout so we can verify output detection
+    for (long i = 0; i < numChannels; ++i) {
+        ASIOChannelInfo ci{};
+        ci.channel = infos[i].channelNum;
+        ci.isInput = infos[i].isInput;
+        m_real->getChannelInfo(&ci);
+        ProxyLog("  ch[%ld] channelNum=%ld isInput=%ld name='%s' type=%d buf[0]=%p buf[1]=%p\r\n",
+                 i, infos[i].channelNum, (long)infos[i].isInput,
+                 ci.name, (int)ci.type,
+                 infos[i].buffers[0], infos[i].buffers[1]);
+    }
+    for (long i = 0; i < m_numOut; ++i) {
+        ProxyLog("  outIdx[%ld] = bufInfos[%d] type=%d\r\n",
+                 i, m_outIdx[i], (int)m_outType[i]);
+    }
+
     // Write metadata into shared memory so OBS knows what to expect
     if (m_shm) {
         ASIOSampleRate sr = 0;
@@ -217,10 +246,17 @@ void ProxyASIODriver::onBufferSwitch(long index, ASIOBool direct)
                  m_shm ? (int)m_shm->active : -1,
                  m_shm ? m_shm->writePos : -1);
 
+    // Call the DAW's callback — it fills the output buffers
     if (m_dawCallbacks.bufferSwitch)
         m_dawCallbacks.bufferSwitch(index, direct);
 
-    writeOutputsToRing(index);
+    if (m_dawUsesOutputReady) {
+        // DAW fills buffers asynchronously; defer read until outputReady()
+        m_pendingIndex = index;
+    } else {
+        // DAW fills buffers synchronously in the callback; read now
+        writeOutputsToRing(index);
+    }
 }
 
 ASIOTime *ProxyASIODriver::onBufferSwitchTimeInfo(ASIOTime *t, long index, ASIOBool direct)
@@ -231,7 +267,11 @@ ASIOTime *ProxyASIODriver::onBufferSwitchTimeInfo(ASIOTime *t, long index, ASIOB
     else if (m_dawCallbacks.bufferSwitch)
         m_dawCallbacks.bufferSwitch(index, direct);
 
-    writeOutputsToRing(index);
+    if (m_dawUsesOutputReady) {
+        m_pendingIndex = index;
+    } else {
+        writeOutputsToRing(index);
+    }
     return ret;
 }
 
@@ -295,20 +335,34 @@ void ProxyASIODriver::writeOutputsToRing(long index)
         DWORD now = GetTickCount();
         if (now - s_lastLogMs >= 20) {
             s_lastLogMs = now;
-            float s0 = 0.0f, s1 = 0.0f;
+            // Find peak absolute value across all frames of ch0 in the ASIO buffer
+            float peak = 0.0f;
             if (nch >= 1 && m_bufInfos) {
                 const int   bi  = m_outIdx[0];
                 const void *buf = m_bufInfos[bi].buffers[index];
                 if (buf) {
-                    s0 = sampleToFloat(buf, m_outType[0]);
-                    if (frames > 1)
-                        s1 = sampleToFloat(
-                            static_cast<const uint8_t*>(buf) + sampleByteSize(m_outType[0]),
+                    int bsz = sampleByteSize(m_outType[0]);
+                    for (long f = 0; f < frames; ++f) {
+                        float v = sampleToFloat(
+                            static_cast<const uint8_t*>(buf) + f * bsz,
                             m_outType[0]);
+                        if (v > peak) peak = v;
+                        if (-v > peak) peak = -v;
+                    }
                 }
             }
-            ProxyLog("[AUDIO] t=%lu nch=%ld frames=%ld ch0[0]=%.5f ch0[1]=%.5f wpos=%lld\r\n",
-                     now, nch, frames, s0, s1, m_shm ? m_shm->writePos : -1LL);
+            // Also check what's in the ring at the slot we just wrote
+            float ringPeak = 0.0f;
+            if (m_shm) {
+                for (long f = 0; f < frames; ++f) {
+                    uint32_t slot = static_cast<uint32_t>((writePos + f) & mask);
+                    float v = m_shm->data[slot * DAW_MAX_CHANNELS];
+                    if (v > ringPeak) ringPeak = v;
+                    if (-v > ringPeak) ringPeak = -v;
+                }
+            }
+            ProxyLog("[AUDIO] t=%lu nch=%ld frames=%ld asioPeak=%.6f ringPeak=%.6f wpos=%lld\r\n",
+                     now, nch, frames, peak, ringPeak, m_shm ? m_shm->writePos : -1LL);
         }
     }
 #endif

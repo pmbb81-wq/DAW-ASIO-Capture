@@ -49,6 +49,7 @@ struct DAWSource {
     HANDLE         thread         = nullptr;
     volatile LONG  threadRunning  = 0;
     int            outputPair     = 0;   // 0=ch0-1, 1=ch2-3, 2=ch4-5, 3=ch6-7
+    uint64_t       audioTimestamp = 0;   // monotonic timestamp based on sample count
 };
 
 // ---------------------------------------------------------------------------
@@ -170,8 +171,11 @@ static void InstallProxy(DAWSource *s, const GUID &clsid)
 static DWORD WINAPI AudioThread(LPVOID param)
 {
     DAWSource *s = static_cast<DAWSource*>(param);
-    std::vector<float> planes[DAW_MAX_CHANNELS];
+    std::vector<float> planeL, planeR;
     const uint8_t *planePtrs[MAX_AV_PLANES] = {};
+
+    planeL.resize(READ_CHUNK_FRAMES);
+    planeR.resize(READ_CHUNK_FRAMES);
 
     while (InterlockedCompareExchange(&s->threadRunning, 1, 1)) {
 
@@ -180,7 +184,11 @@ static DWORD WINAPI AudioThread(LPVOID param)
         else
             Sleep(10);
 
-        if (!s->shm || !s->shm->active) { s->synced = false; continue; }
+        if (!s->shm || !s->shm->active) {
+            s->synced = false;
+            s->audioTimestamp = 0;
+            continue;
+        }
 
         const uint32_t sr  = s->shm->sampleRate;
         const uint32_t nch = s->shm->numChannels;
@@ -190,48 +198,70 @@ static DWORD WINAPI AudioThread(LPVOID param)
         const uint32_t pair     = (uint32_t)s->outputPair;
         const uint32_t chL      = pair * 2;
         const uint32_t chR      = pair * 2 + 1;
-        // If the pair is beyond what the proxy captured, fall back to ch 0/1
         const uint32_t srcChL   = (chL < nch) ? chL : 0;
         const uint32_t srcChR   = (chR < nch) ? chR : (nch > 1 ? 1 : 0);
 
+        // Compute target lag in frames from sample rate (~40ms at any rate)
+        const uint32_t targetLagFrames = (sr * TARGET_LAG_MS) / 1000;
+
+        // Memory fence before reading writePos to see the latest value
+        _ReadWriteBarrier();
         int64_t writePos = s->shm->writePos;
+        int64_t gap = writePos - s->localReadPos;
 
-        if (!s->synced ||
-            (writePos - s->localReadPos) > (int64_t)(RING_FRAMES / 2)) {
-            s->localReadPos = writePos - (int64_t)TARGET_LAG_FRAMES;
+        // Re-sync if: not yet synced, reader too far behind (writer lapped us),
+        // or reader somehow ahead of writer
+        if (!s->synced || gap > (int64_t)(RING_FRAMES - targetLagFrames) || gap < 0) {
+            s->localReadPos = writePos - (int64_t)targetLagFrames;
             s->synced = true;
+            // Reset timestamp on re-sync so OBS starts fresh
+            s->audioTimestamp = 0;
+            gap = targetLagFrames;
         }
 
-        if ((writePos - s->localReadPos) < (int64_t)READ_CHUNK_FRAMES) continue;
-
-        // Always output stereo
-        if (planes[0].size() != READ_CHUNK_FRAMES) planes[0].resize(READ_CHUNK_FRAMES);
-        if (planes[1].size() != READ_CHUNK_FRAMES) planes[1].resize(READ_CHUNK_FRAMES);
-
+        // Drain all available chunks in a loop — don't leave data piling up.
+        // This prevents the reader from falling behind and causing timestamp
+        // jumps when it catches up in bursts.
         const uint32_t mask = RING_FRAMES - 1;
-        for (uint32_t f = 0; f < READ_CHUNK_FRAMES; ++f) {
-            uint32_t     slot = (uint32_t)((s->localReadPos + f) & mask);
-            const float *src  = &s->shm->data[slot * DAW_MAX_CHANNELS];
-            planes[0][f] = src[srcChL];
-            planes[1][f] = src[srcChR];
+        int chunksRead = 0;
+        const int MAX_CHUNKS_PER_WAKE = 16; // safety limit
+
+        while (gap >= (int64_t)READ_CHUNK_FRAMES && chunksRead < MAX_CHUNKS_PER_WAKE) {
+
+            for (uint32_t f = 0; f < READ_CHUNK_FRAMES; ++f) {
+                uint32_t     slot = (uint32_t)((s->localReadPos + f) & mask);
+                const float *src  = &s->shm->data[slot * DAW_MAX_CHANNELS];
+                planeL[f] = src[srcChL];
+                planeR[f] = src[srcChR];
+            }
+            s->localReadPos += READ_CHUNK_FRAMES;
+
+            memset(planePtrs, 0, sizeof(planePtrs));
+            planePtrs[0] = reinterpret_cast<const uint8_t*>(planeL.data());
+            planePtrs[1] = reinterpret_cast<const uint8_t*>(planeR.data());
+
+            // Use a monotonic timestamp derived from sample count.
+            // This eliminates pitch glitches caused by thread scheduling jitter.
+            // On first chunk (or after re-sync), seed from wall clock.
+            if (s->audioTimestamp == 0)
+                s->audioTimestamp = hw_time_ns();
+
+            obs_source_audio frame = {};
+            for (int i = 0; i < MAX_AV_PLANES; ++i) frame.data[i] = planePtrs[i];
+            frame.frames          = READ_CHUNK_FRAMES;
+            frame.format          = AUDIO_FORMAT_FLOAT_PLANAR;
+            frame.speakers        = SPEAKERS_STEREO;
+            frame.samples_per_sec = sr;
+            frame.timestamp       = s->audioTimestamp;
+
+            obs_source_output_audio(s->obsSource, &frame);
+
+            // Advance timestamp by exact sample duration — never drifts
+            s->audioTimestamp += (uint64_t)READ_CHUNK_FRAMES * 1000000000ULL / sr;
+
+            gap -= READ_CHUNK_FRAMES;
+            ++chunksRead;
         }
-        s->localReadPos += READ_CHUNK_FRAMES;
-
-        memset(planePtrs, 0, sizeof(planePtrs));
-        planePtrs[0] = reinterpret_cast<const uint8_t*>(planes[0].data());
-        planePtrs[1] = reinterpret_cast<const uint8_t*>(planes[1].data());
-
-        const speaker_layout layout = SPEAKERS_STEREO;
-
-        obs_source_audio frame = {};
-        for (int i = 0; i < MAX_AV_PLANES; ++i) frame.data[i] = planePtrs[i];
-        frame.frames          = READ_CHUNK_FRAMES;
-        frame.format          = AUDIO_FORMAT_FLOAT_PLANAR;
-        frame.speakers        = layout;
-        frame.samples_per_sec = sr;
-        frame.timestamp       = hw_time_ns();
-
-        obs_source_output_audio(s->obsSource, &frame);
     }
     return 0;
 }

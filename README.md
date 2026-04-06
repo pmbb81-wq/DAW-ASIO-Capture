@@ -95,6 +95,10 @@ Any DAW that uses ASIO:
 - Pro Tools (ASIO mode)
 - Logic Pro (via ASIO bridge)
 
+## Tested With
+
+This plugin has been tested with **FL Studio** and a **Focusrite Scarlett 8i6 (Gen 3)**. It should work with any DAW and any standard ASIO driver, but no other combinations have been verified. If you test it with a different DAW or interface, feel free to share your results — fork the repo and update this section.
+
 ## Requirements
 
 - Windows 10/11 (64-bit)
