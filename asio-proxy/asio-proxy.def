@@ -1,0 +1,4 @@
+LIBRARY asio-proxy
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE

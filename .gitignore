@@ -1,0 +1,15 @@
+build/
+installer-out/
+release/
+deps/obs-studio/
+deps/obs.lib
+deps/obs.def
+deps/obs-exports.txt
+deps/obs.exp
+deps/obs_exports.txt
+deps/obsconfig.h
+*.user
+*.suo
+*.zip
+.vs/
+.claude/
