@@ -35,7 +35,7 @@ Built for musicians who stream live production sessions and need their DAW audio
 
 Prefer a GUI to editing files and registry keys? Download **`AXE-IO-ONE-OBS-Audio-Capture-Setup.exe`** from the [Releases page](https://github.com/pmbb81-wq/DAW-ASIO-Capture/releases/latest). It auto-detects your OBS folder and installs the plugin plus the 64-bit **and** 32-bit (JAM VOX) ASIO redirects, and can optionally set up FlexASIO.
 
-To record the ASIO stream straight to disk (WAV, or MP3 with `ffmpeg`) without OBS, run **`AXE_IO_ONE_OBS_Manager.exe`** — the lightweight DAW recorder. No Python required. See [`manager/README.md`](manager/README.md).
+To record the ASIO stream straight to disk without OBS, run **`AXE_IO_ONE_OBS_Manager.exe`** — the lightweight DAW recorder. It writes **WAV, MP3, FLAC, OGG or M4A** (`ffmpeg` is bundled, nothing to install). No Python required. See [`manager/README.md`](manager/README.md).
 
 ## What to set, and when
 

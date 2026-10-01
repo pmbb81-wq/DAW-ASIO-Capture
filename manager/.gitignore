@@ -17,8 +17,10 @@ recorder_config.json
 asio_choice.txt
 _t.toml
 
-# Third-party installer fetched separately (kept out of git; shipped in the release)
+# Third-party binaries fetched separately (kept out of git; bundled into the exe / release)
 installers/FlexASIO-*.exe
+ffmpeg/
+ffmpeg/*.exe
 
 # Backups
 *.bak

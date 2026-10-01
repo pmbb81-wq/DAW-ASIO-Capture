@@ -52,6 +52,18 @@ FILE_MAP_READ = 0x0004
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Formaty nagrywania. WAV zapisywany jest natywnie (bez ffmpeg); pozostale
+# wymagaja ffmpeg, ktory jest wbudowany w .exe (katalog ffmpeg obok aplikacji).
+FORMATS = {
+    "WAV":  (".wav", None),
+    "MP3":  (".mp3", ["-c:a", "libmp3lame", "-b:a", "192k"]),
+    "FLAC": (".flac", ["-c:a", "flac", "-compression_level", "8"]),
+    "OGG":  (".ogg", ["-c:a", "libvorbis", "-q:a", "5"]),
+    "M4A":  (".m4a", ["-c:a", "aac", "-b:a", "192k"]),
+}
+FORMAT_NAMES = ["WAV", "MP3", "FLAC", "OGG", "M4A"]
+DEFAULT_FORMAT = "WAV"
+
 
 def exe_dir():
     """Katalog .exe (nie _MEIPASS - tam konfig bylyby tymczasowe)."""
@@ -85,6 +97,18 @@ def save_config(name, data):
 
 
 def find_ffmpeg():
+    """Kolejnosc: ffmpeg wbudowany w .exe (_MEIPASS), potem obok .exe,
+    potem PATH i typowe lokalizacje. Zwraca sciezke albo None."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        p = os.path.join(meipass, "ffmpeg", "ffmpeg.exe")
+        if os.path.exists(p):
+            return p
+    ed = exe_dir()
+    for p in (os.path.join(ed, "ffmpeg", "ffmpeg.exe"),
+              os.path.join(ed, "ffmpeg.exe")):
+        if os.path.exists(p):
+            return p
     exe = shutil.which("ffmpeg")
     if exe:
         return exe
@@ -208,7 +232,7 @@ class RecorderApp:
         self._gui_q = queue.Queue()
 
         root.title("AXE I/O ONE - Nagrywarka (DAW)")
-        root.geometry("560x430")
+        root.geometry("560x460")
         root.resizable(False, False)
 
         self._build_ui()
@@ -234,7 +258,7 @@ class RecorderApp:
         cfg = load_config(REC_CONFIG, {
             "folder": os.path.join(os.path.expanduser("~"), "Documents", "AXE IO ONE Nagrania"),
             "prefix": "daw_",
-            "format": "WAV",
+            "format": DEFAULT_FORMAT,
             "lag_ms": 10,
             "pair": "Out 1-2",
         })
@@ -252,8 +276,9 @@ class RecorderApp:
         ttk.Label(f, text="prefiks pliku").grid(row=4, column=1, sticky="w", **pad)
 
         self.rec_format = ttk.Combobox(f, state="readonly", width=6,
-                                       values=["WAV", "MP3"])
-        self.rec_format.set(cfg["format"])
+                                       values=FORMAT_NAMES)
+        self.rec_format.set(cfg["format"] if cfg["format"] in FORMAT_NAMES
+                            else DEFAULT_FORMAT)
         self.rec_format.grid(row=4, column=2, sticky="w", **pad)
         ttk.Label(f, text="format").grid(row=4, column=3, sticky="w", **pad)
 
@@ -284,6 +309,14 @@ class RecorderApp:
 
         self.lb_rec_info = ttk.Label(f, text="", wraplength=520, justify="left")
         self.lb_rec_info.grid(row=8, column=0, columnspan=4, sticky="w", **pad)
+
+        ff = find_ffmpeg()
+        ttk.Label(
+            f,
+            text=("MP3 / FLAC / OGG / M4A: ffmpeg wlaczony"
+                  if ff else "Uwaga: brak ffmpeg - tylko WAV"),
+            foreground=("#2e7d32" if ff else "#c62828"),
+        ).grid(row=9, column=0, columnspan=4, sticky="w", **pad)
 
     def rec_pick_folder(self):
         from tkinter import filedialog
@@ -347,10 +380,11 @@ class RecorderApp:
             lag = max(0, min(250, int(str(self.rec_lag.get()).strip() or 0)))
         except ValueError:
             lag = 10
+        fmt = self.rec_format.get().strip().upper()
         return {
             "folder": self.rec_folder.get().strip(),
             "prefix": self.rec_prefix.get().strip() or "daw_",
-            "format": self.rec_format.get().strip().upper() or "WAV",
+            "format": fmt if fmt in FORMATS else DEFAULT_FORMAT,
             "lag_ms": lag,
             "pair": pair,
             "ch_l": ch_l,
@@ -377,15 +411,17 @@ class RecorderApp:
         base = os.path.join(folder, cfg["prefix"] + stamp)
         self.rec_path_wav = base + ".wav"
         self.rec_path_out = self.rec_path_wav
-        if cfg["format"] == "MP3":
-            self.rec_path_out = base + ".mp3"
-            if not find_ffmpeg():
+        fmt = cfg["format"]
+        if FORMATS[fmt][1] is not None:
+            if find_ffmpeg():
+                self.rec_path_out = base + FORMATS[fmt][0]
+            else:
                 messagebox.showwarning(
                     "Nagrywarka",
-                    "Nie znaleziono ffmpeg - zapisze WAV zamiast MP3.\n"
-                    "Zainstaluj ffmpeg i dodaj go do PATH, aby dostac MP3.")
-                cfg["format"] = "WAV"
-                self.rec_path_out = self.rec_path_wav
+                    "Nie znaleziono ffmpeg - zapisze WAV zamiast %s.\n"
+                    "ffmpeg jest dolaczony do aplikacji; jesli uruchamiasz ja "
+                    "ze zrodla, dodaj ffmpeg do PATH." % fmt)
+                cfg["format"] = DEFAULT_FORMAT
 
         self.rec_thread = threading.Thread(target=self._rec_worker, args=(cfg,),
                                            daemon=True)
@@ -519,25 +555,27 @@ class RecorderApp:
                 pass
             r.close()
 
-            # WAV gotowy -> opcjonalna konwersja do MP3
+            # WAV gotowy -> konwersja do wybranego formatu
             if (self.rec_error is None and out_path != wav_path and
                     os.path.exists(wav_path)):
+                ext = os.path.splitext(out_path)[1].upper().lstrip(".")
+                args = FORMATS.get(ext, (None, None))[1]
                 exe = find_ffmpeg()
-                if exe:
+                if exe and args:
                     try:
                         subprocess.run(
-                            [exe, "-y", "-i", wav_path, "-c:a", "libmp3lame",
-                             "-b:a", "192k", out_path],
+                            [exe, "-hide_banner", "-loglevel", "error", "-y",
+                             "-i", wav_path] + args + [out_path],
                             capture_output=True, timeout=600,
                             creationflags=NO_WINDOW)
                         if os.path.exists(out_path):
                             os.remove(wav_path)
                         else:
-                            self.rec_error = ("ffmpeg nie utworzyl MP3 - "
-                                              "plik WAV zostal w: " + wav_path)
+                            self.rec_error = ("ffmpeg nie utworzyl pliku %s - "
+                                              "WAV zostal w: %s" % (ext, wav_path))
                     except Exception as e:
-                        self.rec_error = ("konwersja MP3 nie powiodla sie: %s\n"
-                                          "WAV zostal w: %s" % (e, wav_path))
+                        self.rec_error = ("konwersja do %s nie powiodla sie: %s\n"
+                                          "WAV zostal w: %s" % (ext, e, wav_path))
                 else:
                     self.rec_error = ("brak ffmpeg - WAV zostal w: " + wav_path)
 

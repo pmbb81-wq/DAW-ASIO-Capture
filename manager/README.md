@@ -31,23 +31,41 @@ It is self-contained - no Python needed.
 2. Run **`AXE_IO_ONE_OBS_Manager.exe`**.
 3. Click **"Sprawdz proxy"** - the status line should read
    *"Proxy aktywne - mozesz nagrywac"*.
-4. Choose the folder, file prefix, format (WAV/MP3), output pair (`Out 1-2` by
-   default) and the lag in ms (default **10**, resync buffer only - it does not
-   colour the recording).
+4. Choose the folder, file prefix, format, output pair (`Out 1-2` by default) and
+   the lag in ms (default **10**, resync buffer only - it does not colour the
+   recording).
 5. **START** ... **STOP**. The file appears in the chosen folder.
 
-MP3 needs `ffmpeg` on `PATH` (or `C:\ffmpeg\bin\ffmpeg.exe`); without it the
-recording is saved as WAV.
+## Output formats
+
+`ffmpeg` is **bundled inside the app**, so every format below works out of the
+box - nothing to install or put on `PATH`.
+
+| Format | Encoder | Notes |
+|--------|---------|-------|
+| `WAV`  | -       | Native, 16-bit stereo PCM. Written directly, no conversion. |
+| `MP3`  | `libmp3lame` | 192 kbps CBR. |
+| `FLAC` | `flac`  | Lossless, compression level 8. |
+| `OGG`  | `libvorbis` | VBR quality 5. |
+| `M4A`  | `aac`   | 192 kbps AAC in an MP4 container. |
+
+The recorder always writes a WAV first and then transcodes it, so a conversion
+failure leaves the lossless WAV on disk instead of losing the take. If `ffmpeg`
+cannot be found at all, the app falls back to WAV and says so.
 
 ## Building from source (optional)
 
 ```bash
 pip install pyinstaller
+# ffmpeg must be present as ffmpeg/ffmpeg.exe next to the spec (it gets
+# bundled into the exe):
+#   curl -L -o ffmpeg.zip \
+#     https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip
 pyinstaller AXE_IO_ONE_OBS_Manager.spec
 ```
 
-The result is `dist/AXE_IO_ONE_OBS_Manager.exe`. No third-party runtime packages
-are required (Tkinter only).
+The result is `dist/AXE_IO_ONE_OBS_Manager.exe` (~67 MB, ffmpeg included).
+No third-party runtime packages are required (Tkinter only).
 
 ## Shared-memory layout
 
@@ -68,3 +86,7 @@ The layout is fixed and must match `shared/shared-memory.hpp` in this repository
 
 MIT (see the repository `LICENSE`). Original plugin by Monte Emerson
 ([emersound/DAW-ASIO-Capture](https://github.com/emersound/DAW-ASIO-Capture)).
+
+The bundled `ffmpeg.exe` is a separate LGPL build
+([FFmpeg](https://ffmpeg.org/), LGPL-2.1-or-later) redistributed unmodified.
+Source: <https://github.com/BtbN/FFmpeg-Builds>.

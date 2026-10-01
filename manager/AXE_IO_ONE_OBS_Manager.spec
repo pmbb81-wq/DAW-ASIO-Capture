@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Nagrywarka (DAW) - tylko odczyt wspolnej pamieci proxy. Bez sounddevice.
-datas = []
+# ffmpeg.exe jest dolaczany, zeby MP3/FLAC/OGG/M4A dzialaly bez instalacji.
+datas = [('ffmpeg', 'ffmpeg')]
 binaries = []
 hiddenimports = []
 
@@ -31,7 +32,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=['ffmpeg.exe'],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,

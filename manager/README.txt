@@ -25,15 +25,25 @@ JAK UZYC:
   4. Ustaw:
        Folder zapisu    - gdzie zapisac plik,
        prefiks pliku    - poczatek nazwy pliku (domyslnie daw_),
-       format           - WAV albo MP3,
+       format           - WAV, MP3, FLAC, OGG lub M4A,
        para wyjscia     - ktore wyjscia ASIO nagrywac (domyslnie Out 1-2),
        ms opoznienia    - bufor resync (domyslnie 10; nie wplywa na brzmienie).
   5. START ... STOP. Gotowy plik pojawi sie w wybranym folderze.
 
 
-MP3:
-  Wymaga programu ffmpeg w PATH (albo C:\ffmpeg\bin\ffmpeg.exe).
-  Bez niego nagranie zapisze sie jako WAV.
+FORMATY:
+  ffmpeg jest WLACZONY w aplikacje, wiec kazdy format dziala od razu -
+  nie trzeba nic instalowac ani dodawac do PATH.
+
+    WAV  - zapis natywny, 16-bit PCM, bez konwersji
+    MP3  - libmp3lame, 192 kbps CBR
+    FLAC - bezstratny, poziom kompresji 8
+    OGG  - libvorbis, VBR jakosc 5
+    M4A  - AAC 192 kbps w kontenerze MP4
+
+  Nagrywarka najpierw zapisuje WAV, a potem konwertuje do wybranego formatu.
+  Jesli konwersja sie nie powiedzie, plik WAV zostaje na dysku (nic nie ginie).
+  Jesli ffmpeg nie zostanie znaleziony, aplikacja zapisze WAV i ostrzega.
 
 
 PARA WYJSCIA:
@@ -47,11 +57,14 @@ ROZMIAR OKNA / USTAWIENIA:
 
 BUDOWA ZE ZRODEL (opcjonalnie):
   pip install pyinstaller
+  Umiesc ffmpeg\ffmpeg.exe obok pliku .spec (jest dolaczany do .exe).
   pyinstaller AXE_IO_ONE_OBS_Manager.spec
-  Wynik: dist\AXE_IO_ONE_OBS_Manager.exe. Nie wymaga dodatkowych bibliotek
-  (tylko Tkinter).
+  Wynik: dist\AXE_IO_ONE_OBS_Manager.exe (~67 MB z ffmpeg). Nie wymaga
+  dodatkowych bibliotek (tylko Tkinter).
 
 
 LICENCJA:
   MIT (patrz LICENSE w repozytorium). Oryginalny plugin: Monte Emerson
   (emersound/DAW-ASIO-Capture).
+  Dolaczony ffmpeg.exe to osobny build LGPL (FFmpeg, LGPL-2.1+), bez zmian.
+  Zrodlo: https://github.com/BtbN/FFmpeg-Builds

@@ -15,7 +15,7 @@
 ; =====================================================================
 
 #define AppName        "AXE IO ONE - OBS Audio Capture"
-#define AppVersion     "1.2.1"
+#define AppVersion     "1.2.2"
 #define AppIdGuid      "{{7C4B1E92-3D5A-4F18-9B62-1A8E0D3C74F1}"
 #define AppExeName     "AXE-IO-ONE-OBS-Audio-Capture-Setup"
 #define PublisherName  "AXE IO ONE OBS Capture"
@@ -413,8 +413,8 @@ begin
     '3. Wymagane: redirect ASIO aktywny (ustawiony przez ten instalator)' + NL +
     '   i uruchomiony host grajacy przez ASIO.' + NL +
     '4. START ... STOP. Gotowy plik pojawi sie w wybranym folderze.' + NL + NL +
-    'MP3 wymaga programu ffmpeg w PATH (lub C:\ffmpeg\bin\ffmpeg.exe).' + NL +
-    'Bez niego nagranie zapisze sie jako WAV.' + NL + NL +
+    'Formaty: WAV (natywnie) oraz MP3, FLAC, OGG, M4A - ffmpeg jest' + NL +
+    'wlaczony w aplikacje, wiec wszystkie dzialaja od razu.' + NL + NL +
     '--- ODINSTALOWANIE ---' + NL + NL +
     'Panel sterowania > Programy > AXE IO ONE - OBS Audio Capture.' + NL +
     'Przywracany jest oryginalny sterownik ASIO z rejestru oraz' + NL +
