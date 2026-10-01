@@ -15,7 +15,7 @@
 ; =====================================================================
 
 #define AppName        "AXE IO ONE - OBS Audio Capture"
-#define AppVersion     "1.0.0"
+#define AppVersion     "1.2.0"
 #define AppIdGuid      "{{7C4B1E92-3D5A-4F18-9B62-1A8E0D3C74F1}"
 #define AppExeName     "AXE-IO-ONE-OBS-Audio-Capture-Setup"
 #define PublisherName  "AXE IO ONE OBS Capture"
