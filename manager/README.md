@@ -1,65 +1,70 @@
-# AXE I/O ONE OBS Manager
+# AXE I/O ONE - DAW Recorder
 
-A single-window Windows app that gets a guitar/DAW's audio into OBS and back to
-your ears with as little latency as possible. It is the companion GUI for the
-[DAW ASIO Capture](../README.md) plugin in this repository.
+A small single-window Windows app that records exactly what your DAW / JAM VOX
+sends through ASIO straight to disk (WAV, or MP3 when `ffmpeg` is available) -
+without OBS, without virtual cables, and without any hardware-monitoring bleed.
 
-> The app's user interface is in **Polish**. The detailed walk-through lives in
-> the Polish [`README.txt`](README.txt); this file is the English overview.
+It reads the proxy's shared memory (`Local\OBSDAWCapture_Shm`) read-only, so it
+can run at the same time as the OBS source: each consumer keeps its own read
+position.
 
-## What it does
+> The user interface is in **Polish**. The detailed description is in the Polish
+> [`README.txt`](README.txt); this file is the English overview.
 
-Five tabs, one window:
+## Requirement
 
-| Tab | Purpose |
-|-----|---------|
-| **MOST (ONE -> cable)** | Routes an input device (e.g. AXE I/O ONE) to a virtual cable (VB-CABLE) so OBS can record it as a separate track. |
-| **FLEXASIO (ASIO)** | Installs/registers [FlexASIO](https://github.com/dechamps/FlexASIO) and writes `%USERPROFILE%\FlexASIO.toml` profiles (JAM VOX / OBS). |
-| **ASIO Capture (wtyczka)** | Installs the `obs-daw-capture` plugin into OBS, sets up the 64-bit and 32-bit ASIO redirects, and restores them on demand. |
-| **Nagrywarka (DAW)** | Records the ASIO source straight to disk (WAV/FLAC/MP3) without OBS. |
-| **Monitoring (bez OBS)** | Real-time monitoring of whatever the ASIO program plays, with an adjustable latency cushion — no OBS, no DAW. |
+The ASIO driver must already be redirected to the proxy. That is done by the
+**installer** `AXE-IO-ONE-OBS-Audio-Capture-Setup.exe` (it installs the OBS
+plugin and sets the 64-bit / 32-bit redirect). Once the redirect is in place,
+the proxy creates the shared memory whenever a host (DAW / JAM VOX) opens the
+ASIO driver.
 
 ## Download
 
 Grab **`AXE_IO_ONE_OBS_Manager.exe`** from the
 [Releases page](https://github.com/pmbb81-wq/DAW-ASIO-Capture/releases/latest).
-It is self-contained (no Python needed) and bundles the plugin DLLs plus the
-FlexASIO installer.
+It is self-contained - no Python needed.
 
-## Requirements
+## Usage
 
-- Windows 10/11 (64-bit)
-- [OBS Studio](https://obsproject.com/) (the plugin is built against the OBS 32.x API)
-- An ASIO audio interface and its driver installed
-- For the **MOST** tab only: [VB-CABLE](https://vb-audio.com/Cable/) (free; download and reboot once)
+1. Start your DAW (or JAM VOX) and make it play through the ASIO driver.
+2. Run **`AXE_IO_ONE_OBS_Manager.exe`**.
+3. Click **"Sprawdz proxy"** - the status line should read
+   *"Proxy aktywne - mozesz nagrywac"*.
+4. Choose the folder, file prefix, format (WAV/MP3), output pair (`Out 1-2` by
+   default) and the lag in ms (default **10**, resync buffer only - it does not
+   colour the recording).
+5. **START** ... **STOP**. The file appears in the chosen folder.
 
-## Quick start (capture a DAW / JAM VOX into OBS)
-
-1. Run **`AXE_IO_ONE_OBS_Manager.exe`**.
-2. Open the **ASIO Capture (wtyczka)** tab and click **"Zainstaluj / aktualizuj wtyczke"** (accept the UAC prompt).
-3. In OBS: **Sources +** -> **DAW Audio Capture (ASIO)** -> pick your ASIO driver (e.g. `AXE IO ONE`) -> **OK**.
-4. Start your DAW (or JAM VOX) using the same ASIO driver — the OBS meter moves.
-5. Is the DAW 32-bit (e.g. JAM VOX)? On the **ASIO Capture** tab, select the driver and click **"Zainstaluj redirect 32-bit (JAM VOX)"**.
-6. To hear the capture without OBS, use the **Monitoring (bez OBS)** tab instead.
-
-**Capture lag:** each OBS source has a **"Capture lag (ms)"** property; the default is **4 ms**. Lower = tighter sync, higher = safer against crackles. The hard floor is about 1.3 ms.
+MP3 needs `ffmpeg` on `PATH` (or `C:\ffmpeg\bin\ffmpeg.exe`); without it the
+recording is saved as WAV.
 
 ## Building from source (optional)
 
 ```bash
-pip install sounddevice numpy pyinstaller
-# put the FlexASIO installer next to the DLLs so it gets bundled:
-#   installers/FlexASIO-1.10b.exe
+pip install pyinstaller
 pyinstaller AXE_IO_ONE_OBS_Manager.spec
 ```
 
-The result is `dist/AXE_IO_ONE_OBS_Manager.exe`.
+The result is `dist/AXE_IO_ONE_OBS_Manager.exe`. No third-party runtime packages
+are required (Tkinter only).
 
-## Notes
+## Shared-memory layout
 
-- **FlexASIO** is GPL-3.0 — its installer is redistributed as-is inside the
-  manager / release; source and license: https://github.com/dechamps/FlexASIO
-- **VB-CABLE** is freeware and is **not** bundled; download it yourself.
-- This manager and the low-latency plugin changes are MIT licensed (see the
-  repository `LICENSE`). Original plugin by Monte Emerson
-  ([emersound/DAW-ASIO-Capture](https://github.com/emersound/DAW-ASIO-Capture)).
+The layout is fixed and must match `shared/shared-memory.hpp` in this repository:
+
+| Offset | Type | Meaning |
+|-------:|------|---------|
+| 0  | uint32 | sampleRate |
+| 4  | uint32 | numChannels |
+| 8  | uint32 | bufferFrames |
+| 12 | int64  | writePos (next frame the proxy will write) |
+| 20 | int64  | readPos (used by the OBS source - the recorder does not touch it) |
+| 28 | int32  | active (1 while streaming) |
+| 32 | int32  | padding |
+| 36 | float32[] | interleaved data, `RING_FRAMES * 8` samples |
+
+## License
+
+MIT (see the repository `LICENSE`). Original plugin by Monte Emerson
+([emersound/DAW-ASIO-Capture](https://github.com/emersound/DAW-ASIO-Capture)).

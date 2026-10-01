@@ -15,7 +15,7 @@
 ; =====================================================================
 
 #define AppName        "AXE IO ONE - OBS Audio Capture"
-#define AppVersion     "1.2.0"
+#define AppVersion     "1.2.1"
 #define AppIdGuid      "{{7C4B1E92-3D5A-4F18-9B62-1A8E0D3C74F1}"
 #define AppExeName     "AXE-IO-ONE-OBS-Audio-Capture-Setup"
 #define PublisherName  "AXE IO ONE OBS Capture"
@@ -402,16 +402,16 @@ begin
     'JAM VOX musi byc wylaczony (takze proces InitJam.exe), inaczej plik' + NL +
     'konfiguracyjny zostanie nadpisany przy wyjsciu z programu.' + NL + NL +
     '--- NAGRYWARKA (DAW) ---' + NL + NL +
-    'AXE_IO_ONE_OBS_Manager.exe ma zakladke "Nagrywarka (DAW)".' + NL +
+    'AXE_IO_ONE_OBS_Manager.exe to nagrywarka strumienia ASIO.' + NL +
     'Nagrywa dokladnie to, co DAW/JAM VOX wysyla przez ASIO, prosto z' + NL +
     'tej samej wspolnej pamieci co zrodlo OBS - bez kabli wirtualnych i' + NL +
     'bez domieszki monitoringu sprzetowego. Dziala rownoczesnie z' + NL +
     'zrodlem OBS (kazdy ma wlasna pozycje odczytu).' + NL + NL +
-    '1. Zakladka "Nagrywarka (DAW)" - przycisk "Sprawdz proxy".' + NL +
+    '1. Uruchom nagrywarke - przycisk "Sprawdz proxy".' + NL +
     '2. Ustaw folder, prefiks, format (WAV, opcjonalnie MP3) i pare' + NL +
     '   wyjscia (domyslnie Out 1-2).' + NL +
-    '3. Wymagane: redirect aktywny (zakladka "ASIO Capture") i uruchomiony' + NL +
-    '   host grajacy przez ASIO.' + NL +
+    '3. Wymagane: redirect ASIO aktywny (ustawiony przez ten instalator)' + NL +
+    '   i uruchomiony host grajacy przez ASIO.' + NL +
     '4. START ... STOP. Gotowy plik pojawi sie w wybranym folderze.' + NL + NL +
     'MP3 wymaga programu ffmpeg w PATH (lub C:\ffmpeg\bin\ffmpeg.exe).' + NL +
     'Bez niego nagranie zapisze sie jako WAV.' + NL + NL +

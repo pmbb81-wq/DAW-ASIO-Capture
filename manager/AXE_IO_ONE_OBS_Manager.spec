@@ -1,15 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
-
-datas = [('installers', 'installers')]
+# Nagrywarka (DAW) - tylko odczyt wspolnej pamieci proxy. Bez sounddevice.
+datas = []
 binaries = []
 hiddenimports = []
-tmp_ret = collect_all('sounddevice')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['axeio_obs_manager.py'],
+    ['daw_recorder.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,

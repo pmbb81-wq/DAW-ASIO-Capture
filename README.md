@@ -31,9 +31,11 @@ Built for musicians who stream live production sessions and need their DAW audio
 
 **Order matters: OBS first, DAW second.** To shut down, close the **DAW first**, then **OBS**, so the ASIO driver is restored cleanly. If OBS ever crashes, run **`uninstall.bat`** as administrator to restore your driver.
 
-### All-in-one option: the Manager app
+### All-in-one option: the installer + DAW Recorder
 
-Prefer a GUI to editing files and registry keys? Download **`AXE_IO_ONE_OBS_Manager.exe`** from the same [Releases page](https://github.com/pmbb81-wq/DAW-ASIO-Capture/releases/latest). It installs the plugin into OBS, sets up the 64-bit **and** 32-bit (JAM VOX) ASIO redirects, and adds a recorder plus an OBS-free monitoring view — all from one window. No Python required, and it also bundles FlexASIO. See [`manager/README.md`](manager/README.md).
+Prefer a GUI to editing files and registry keys? Download **`AXE-IO-ONE-OBS-Audio-Capture-Setup.exe`** from the [Releases page](https://github.com/pmbb81-wq/DAW-ASIO-Capture/releases/latest). It auto-detects your OBS folder and installs the plugin plus the 64-bit **and** 32-bit (JAM VOX) ASIO redirects, and can optionally set up FlexASIO.
+
+To record the ASIO stream straight to disk (WAV, or MP3 with `ffmpeg`) without OBS, run **`AXE_IO_ONE_OBS_Manager.exe`** — the lightweight DAW recorder. No Python required. See [`manager/README.md`](manager/README.md).
 
 ## What to set, and when
 
@@ -390,12 +392,12 @@ obs-daw-capture/
 │   ├── asio-capture.hpp
 │   ├── asio-registry.cpp    # ASIO driver enumeration + proxy registration
 │   └── asio-registry.hpp
-├── manager/                 # AXE I/O ONE OBS Manager (Python GUI app)
-│   ├── axeio_obs_manager.py # main window: MOST / FLEXASIO / ASIO Capture / recorder / monitoring
-│   ├── setup_flexasio.py    # writes %USERPROFILE%\FlexASIO.toml profiles
-│   ├── installers/          # plugin DLLs bundled with the app (+ FlexASIO in the release)
+├── manager/                 # AXE I/O ONE - DAW Recorder (Python GUI app)
+│   ├── daw_recorder.py      # single-window recorder (reads the proxy shared memory)
+│   ├── AXE_IO_ONE_OBS_Manager.spec  # PyInstaller build recipe
+│   ├── installers/          # plugin DLLs bundled with the installer (+ FlexASIO in the release)
 │   ├── installer/           # Inno Setup script
-│   └── README.md            # manager overview
+│   └── README.md            # recorder overview
 ├── deps/                    # Build dependencies
 │   ├── obs-studio/          # OBS headers (sparse clone)
 │   ├── obs.lib              # OBS import library
