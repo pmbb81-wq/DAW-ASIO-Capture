@@ -31,6 +31,10 @@ Built for musicians who stream live production sessions and need their DAW audio
 
 **Order matters: OBS first, DAW second.** To shut down, close the **DAW first**, then **OBS**, so the ASIO driver is restored cleanly. If OBS ever crashes, run **`uninstall.bat`** as administrator to restore your driver.
 
+### All-in-one option: the Manager app
+
+Prefer a GUI to editing files and registry keys? Download **`AXE_IO_ONE_OBS_Manager.exe`** from the same [Releases page](https://github.com/pmbb81-wq/DAW-ASIO-Capture/releases/latest). It installs the plugin into OBS, sets up the 64-bit **and** 32-bit (JAM VOX) ASIO redirects, and adds a recorder plus an OBS-free monitoring view — all from one window. No Python required, and it also bundles FlexASIO. See [`manager/README.md`](manager/README.md).
+
 ## What to set, and when
 
 | Setting | Where | Suggested value |
@@ -367,6 +371,8 @@ Or manually in `regedit`: find your driver's CLSID under `HKLM\SOFTWARE\Classes\
 obs-daw-capture/
 ├── shared/                  # Shared between proxy and plugin
 │   ├── shared-memory.hpp    # Ring buffer struct and constants
+│   ├── direct-monitor.cpp   # Proxy-side direct monitoring (SHM -> WASAPI)
+│   ├── direct-monitor.hpp
 │   └── asio-types.hpp       # ASIO type definitions (no SDK dependency)
 ├── asio-proxy/              # Proxy DLL (runs inside DAW)
 │   ├── CMakeLists.txt
@@ -374,6 +380,7 @@ obs-daw-capture/
 │   ├── dllmain.cpp          # COM server entry point
 │   ├── proxy-driver.cpp     # ASIO driver wrapper + ring buffer writer
 │   └── proxy-driver.hpp
+├── asio-proxy-x86/          # Same proxy, built for 32-bit DAWs (e.g. JAM VOX)
 ├── obs-plugin/              # OBS plugin DLL
 │   ├── CMakeLists.txt
 │   ├── plugin-main.cpp      # OBS module entry point
@@ -383,6 +390,12 @@ obs-daw-capture/
 │   ├── asio-capture.hpp
 │   ├── asio-registry.cpp    # ASIO driver enumeration + proxy registration
 │   └── asio-registry.hpp
+├── manager/                 # AXE I/O ONE OBS Manager (Python GUI app)
+│   ├── axeio_obs_manager.py # main window: MOST / FLEXASIO / ASIO Capture / recorder / monitoring
+│   ├── setup_flexasio.py    # writes %USERPROFILE%\FlexASIO.toml profiles
+│   ├── installers/          # plugin DLLs bundled with the app (+ FlexASIO in the release)
+│   ├── installer/           # Inno Setup script
+│   └── README.md            # manager overview
 ├── deps/                    # Build dependencies
 │   ├── obs-studio/          # OBS headers (sparse clone)
 │   ├── obs.lib              # OBS import library

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# PyInstaller output
+build/
+dist/
+*.exe
+*.pdb
+*.manifest
+
+# Machine-specific runtime data and logs
+*.log
+recorder_config.json
+asio_choice.txt
+_t.toml
+
+# Third-party installer fetched separately (kept out of git; shipped in the release)
+installers/FlexASIO-*.exe
+
+# Backups
+*.bak
+*.bak-*
