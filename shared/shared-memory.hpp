@@ -11,14 +11,18 @@
 static constexpr uint32_t RING_FRAMES        = 131072; // 2^17
 static constexpr uint32_t DAW_MAX_CHANNELS   = 8;      // avoid conflict with mmreg.h MAX_CHANNELS
 
-// OBS reads this many frames per chunk (~10ms @ 48kHz)
-// Smaller chunks = more responsive with tiny ASIO buffers (32-64 frames)
-static constexpr uint32_t READ_CHUNK_FRAMES  = 512;
+// OBS reads this many frames per chunk.
+// CRITICAL for latency: the reader can only emit a whole chunk at a time,
+// so the chunk size is the hard floor of the capture delay. 256 frames cost
+// ~5.3ms @48k; 64 frames cost ~1.3ms @48k with no downside for normal ASIO
+// buffers (the per-wake cap below still drains a full ASIO buffer in one go).
+static constexpr uint32_t READ_CHUNK_FRAMES  = 64;
 
-// Target lag in milliseconds — converted to frames at runtime based on sample rate.
-// This keeps the delay consistent (~40ms) regardless of whether the DAW runs
-// at 44.1kHz, 48kHz, 88.2kHz, 96kHz, or 192kHz.
-static constexpr uint32_t TARGET_LAG_MS      = 40;
+// Fallback lag in milliseconds — the per-source "capture_lag_ms" setting
+// overrides this at runtime. Small cushion so the reader never outruns the
+// writer's ASIO bursts (protects against torn reads of the frame being
+// written). 4ms is safe at every standard rate.
+static constexpr uint32_t TARGET_LAG_MS      = 4;
 
 // Written by the proxy (inside DAW process), read by OBS plugin
 #pragma pack(push, 1)

@@ -1,4 +1,5 @@
 build/
+build-*/
 installer-out/
 release/
 deps/obs-studio/

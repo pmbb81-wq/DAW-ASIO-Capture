@@ -1,6 +1,15 @@
 # OBS DAW Audio Capture (ASIO)
 
-Capture your DAW's ASIO output directly into OBS as a separate audio source. No virtual audio cables, no loopback routing, no mic bleed — pure software output from your DAW with ~40ms of transparent buffering.
+Capture your DAW's ASIO output directly into OBS as a separate audio source. No virtual audio cables, no loopback routing, no mic bleed — pure software output from your DAW into OBS.
+
+> **This fork (`pmbb81-wq/DAW-ASIO-Capture`)** is a low-latency build of the original
+> [`emersound/DAW-ASIO-Capture`](https://github.com/emersound/DAW-ASIO-Capture).
+> The capture delay is configurable per source and defaults to a single-digit
+> millisecond cushion instead of the original fixed ~40 ms, the reader wakes on
+> an event instead of polling, and a **direct-monitoring** path lets the proxy
+> play the ASIO output straight to your headphones without any extra process.
+> See [Fork changes](#fork-changes) for the full list. Original MIT work by
+> Monte Emerson; this fork keeps the same MIT license.
 
 Built for musicians who stream live production sessions and need their DAW audio in OBS without interfering with their low-latency ASIO monitoring.
 
@@ -46,9 +55,9 @@ The plugin works by inserting a transparent **ASIO proxy driver** between your D
 
 1. Loads the real driver and forwards all calls to it — your DAW works exactly as before
 2. After each audio buffer callback (when the DAW has filled its output buffers), copies the output samples into a **shared memory ring buffer**
-3. The OBS plugin reads from the other side of that ring buffer with a ~40ms delay
+3. The OBS plugin reads from the other side of that ring buffer with a small, configurable delay (default ~4 ms, adjustable per source)
 
-Your ASIO monitoring stays at its original ultra-low latency. The 40ms delay is only in the OBS copy — think of it like a tape recorder that's always 40ms behind the live performance.
+Your ASIO monitoring stays at its original ultra-low latency. The capture delay is only in the OBS copy — think of it like a tape recorder that's always a hair behind the live performance. In this fork the cushion is miniscule, so the OBS audio lines up tightly with what you hear.
 
 ### Why Not Just Use...
 
@@ -179,8 +188,8 @@ This removes both plugin DLLs from OBS and restores all ASIO drivers to their or
 ### Steps
 
 ```bash
-git clone https://github.com/youruser/obs-daw-capture.git
-cd obs-daw-capture
+git clone https://github.com/pmbb81-wq/DAW-ASIO-Capture.git
+cd DAW-ASIO-Capture
 ```
 
 #### 1. Get OBS Headers
@@ -247,20 +256,20 @@ The system has two DLLs that run in separate processes:
 **`obs-daw-capture.dll`** — runs inside OBS's process
 - Registers as an OBS audio input source
 - Opens the shared memory ring buffer
-- Reads audio data with a ~40ms lag behind the write position
+- Reads audio data a small, configurable lag behind the write position (default 4 ms)
 - Outputs planar Float32 audio to OBS at the DAW's native sample rate
 
 ### Shared Memory Ring Buffer
 
 The two processes communicate through a named shared memory segment (`Local\OBSDAWCapture_Shm`):
 
-- **Ring size:** 16,384 frames (~341ms at 48kHz) — power of two for efficient wrapping
-- **Target lag:** 2,048 frames (~40ms at 48kHz) — the "tape delay"
-- **Read chunk:** 2,048 frames — OBS reads in chunks matching the lag
+- **Ring size:** 131,072 frames (~2.7s at 48kHz) — power of two for efficient wrapping
+- **Target lag:** 4 ms by default (`TARGET_LAG_MS`), overridable per source via the **Capture lag (ms)** property
+- **Read chunk:** 64 frames — the reader can only emit whole chunks, so this is the hard floor of the capture delay (~1.3 ms at 48kHz)
 - **Max channels:** 8 (supports up to 7.1 surround, though stereo is typical)
 - **Format:** Interleaved Float32 in the ring, converted to planar for OBS
 
-The proxy writes frames and advances `writePos`. OBS reads frames from `TARGET_LAG_FRAMES` behind `writePos`. A named event (`Local\OBSDAWCapture_NewData`) allows OBS to wake immediately when new data arrives instead of polling.
+The proxy writes frames and advances `writePos`. OBS reads frames a configurable lag behind `writePos`. A named event (`Local\OBSDAWCapture_NewData`) allows OBS to wake immediately when new data arrives instead of polling, so the reader does not add polling latency on top of the cushion.
 
 ### ASIO Driver Interception
 
@@ -366,6 +375,32 @@ If you want to extend it, fix bugs, or add features — **fork it.** That's why 
 - **macOS / Linux** — ASIO is Windows-only, but CoreAudio (macOS) and JACK (Linux) could use similar proxy approaches
 - **Automatic driver restoration watchdog** — a background service to restore drivers if OBS crashes
 - **ASIO4ALL / FL Studio ASIO support** — test and document behavior with software ASIO drivers
+
+## Fork changes
+
+This fork builds on the original plugin and focuses on latency, robustness and
+a few quality-of-life extras:
+
+- **Low, configurable capture lag.** The reader no longer holds a fixed ~40 ms
+  cushion. `TARGET_LAG_MS` defaults to **4 ms**, and each source exposes a
+  **Capture lag (ms)** property so you can trade stability for latency.
+- **Smaller read chunk.** `READ_CHUNK_FRAMES` dropped from 256 to **64 frames**
+  (~1.3 ms at 48 kHz). Because the reader can only emit whole chunks, this is
+  the hard floor of the capture delay; the per-wake cap still drains a full ASIO
+  buffer in one go, so the smaller chunk costs nothing on normal setups.
+- **Event-driven wake, no polling tax.** The reader wakes on the proxy's
+  data event with a short 2 ms wait and an adaptive "snap" threshold, so large
+  ASIO buffers are still drained completely without dropouts.
+- **Bigger ring buffer.** 131,072 frames (~2.7 s at 48 kHz) absorbs longer
+  stalls and very high sample rates.
+- **Direct monitoring.** The proxy can play the captured ASIO output straight
+  to a chosen output device (WASAPI) from its own render thread — no second
+  process, no Python, no extra buffering. See `shared/direct-monitor.cpp`.
+- **32-bit proxy build.** `asio-proxy-x86/` builds the proxy for 32-bit hosts
+  and DAWs (e.g. legacy 32-bit hosts).
+- **Synchronous capture fix.** Output buffers are copied to the ring inside
+  `bufferSwitch` for hosts that fill them synchronously, fixing missing audio
+  on some DAWs.
 
 ## License
 

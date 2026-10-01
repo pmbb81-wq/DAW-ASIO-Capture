@@ -101,8 +101,8 @@ private:
 // Static trampoline callbacks — installed as the ASIO driver's callbacks
 // so the real driver calls us, and we forward to the DAW after copying.
 namespace ProxyTrampoline {
-    void       CALLBACK bufferSwitch(long index, ASIOBool direct);
-    ASIOTime * CALLBACK bufferSwitchTimeInfo(ASIOTime *t, long index, ASIOBool direct);
-    void       CALLBACK sampleRateChanged(ASIOSampleRate sr);
-    long       CALLBACK asioMessage(long sel, long val, void *msg, double *opt);
+    void       bufferSwitch(long index, ASIOBool direct);
+    ASIOTime * bufferSwitchTimeInfo(ASIOTime *t, long index, ASIOBool direct);
+    void       sampleRateChanged(ASIOSampleRate sr);
+    long       asioMessage(long sel, long val, void *msg, double *opt);
 }

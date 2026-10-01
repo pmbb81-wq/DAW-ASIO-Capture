@@ -1,0 +1,4 @@
+LIBRARY asio-proxy
+EXPORTS
+    DllGetClassObject = _DllGetClassObject@12
+    DllCanUnloadNow   = _DllCanUnloadNow@0

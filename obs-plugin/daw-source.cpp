@@ -7,9 +7,11 @@
 #include <windows.h>
 #include <objbase.h>
 #include <obs-module.h>
+#include <util/platform.h>
 #include <media-io/audio-io.h>
 #include <cstring>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -24,13 +26,14 @@
 // Timestamp
 // ---------------------------------------------------------------------------
 
+// OBS expects obs_source_audio.timestamp in the same timebase as
+// os_gettime_ns() — nanoseconds since the Unix epoch. QueryPerformanceCounter
+// counts from boot, which is a different epoch entirely; feeding that to
+// obs_source_output_audio makes the mixer treat every frame as decades stale
+// and drop it, so nothing reaches the output (stream or monitoring).
 static uint64_t hw_time_ns()
 {
-    static LARGE_INTEGER freq = {};
-    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
-    LARGE_INTEGER count;
-    QueryPerformanceCounter(&count);
-    return (uint64_t)count.QuadPart * 1000000000ULL / (uint64_t)freq.QuadPart;
+    return os_gettime_ns();
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +52,10 @@ struct DAWSource {
     HANDLE         thread         = nullptr;
     volatile LONG  threadRunning  = 0;
     int            outputPair     = 0;   // 0=ch0-1, 1=ch2-3, 2=ch4-5, 3=ch6-7
+    int            captureLagMs   = 4;   // read lag behind the writer, in ms
     uint64_t       audioTimestamp = 0;   // monotonic timestamp based on sample count
+    float          diagPeak       = 0.0f;   // peak handed to OBS, for logging
+    uint64_t       diagLastLogNs  = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -179,10 +185,14 @@ static DWORD WINAPI AudioThread(LPVOID param)
 
     while (InterlockedCompareExchange(&s->threadRunning, 1, 1)) {
 
+        // Short wake-up: the proxy signals on every ASIO buffer, but if a
+        // signal is ever missed/coalesced we must not sleep longer than a
+        // fraction of the target lag. 2ms keeps the worst case tiny while
+        // costing nothing (WaitForSingleObject blocks, it does not spin).
         if (s->dataEvent)
-            WaitForSingleObject(s->dataEvent, 20);
+            WaitForSingleObject(s->dataEvent, 2);
         else
-            Sleep(10);
+            Sleep(2);
 
         if (!s->shm || !s->shm->active) {
             s->synced = false;
@@ -201,32 +211,56 @@ static DWORD WINAPI AudioThread(LPVOID param)
         const uint32_t srcChL   = (chL < nch) ? chL : 0;
         const uint32_t srcChR   = (chR < nch) ? chR : (nch > 1 ? 1 : 0);
 
-        // Compute target lag in frames from sample rate (~40ms at any rate)
-        const uint32_t targetLagFrames = (sr * TARGET_LAG_MS) / 1000;
+        // Configurable target lag (ms) — the reader stays pinned this far
+        // behind the writer so the delay is constant, never growing.
+        // Cached: updated on create/update, never queried from the audio
+        // thread (keeps the hot path free of OBS data lookups).
+        const int lagMs = s->captureLagMs < 0 ? 0 : s->captureLagMs;
+        const int64_t targetLagFrames =
+            (int64_t)(sr * (uint32_t)lagMs) / 1000;
 
-        // Memory fence before reading writePos to see the latest value
+        // Snap threshold must scale with the writer's own ASIO buffer: the
+        // reader trails the head by roughly one buffer plus one chunk, so a
+        // fixed READ_CHUNK_FRAMES*4 window would drop audio whenever the ASIO
+        // buffer is larger than the chunk. Two buffers of slack is plenty.
+        const int64_t snapThreshold =
+            (int64_t)s->shm->bufferFrames * 2 + (int64_t)READ_CHUNK_FRAMES * 2;
+
         _ReadWriteBarrier();
-        int64_t writePos = s->shm->writePos;
-        int64_t gap = writePos - s->localReadPos;
+        const int64_t writePos = s->shm->writePos;
 
-        // Re-sync if: not yet synced, reader too far behind (writer lapped us),
-        // or reader somehow ahead of writer
-        if (!s->synced || gap > (int64_t)(RING_FRAMES - targetLagFrames) || gap < 0) {
-            s->localReadPos = writePos - (int64_t)targetLagFrames;
+        // First lock-on for a streaming session (writer just started)
+        if (!s->synced) {
+            s->localReadPos = writePos - targetLagFrames;
             s->synced = true;
-            // Reset timestamp on re-sync so OBS starts fresh
-            s->audioTimestamp = 0;
-            gap = targetLagFrames;
+        } else {
+            // Keep the lag pinned. If the writer ever jumps far (new session,
+            // big stall, or JAM VOX pause), snap the read head to the target
+            // instead of slowly accumulating delay. The timestamp clock is
+            // NEVER reset during streaming, so OBS never re-buffers and the
+            // perceived latency stays constant.
+            const int64_t targetHead = writePos - targetLagFrames;
+            const int64_t skip = targetHead - s->localReadPos;
+            if (skip > snapThreshold)
+                s->localReadPos = targetHead;           // drop stale audio
+            else if (skip < -snapThreshold)
+                s->localReadPos = writePos;             // wait for writer
         }
+        if (s->localReadPos < 0) s->localReadPos = writePos - targetLagFrames;
 
-        // Drain all available chunks in a loop — don't leave data piling up.
-        // This prevents the reader from falling behind and causing timestamp
-        // jumps when it catches up in bursts.
+        // Read chunks until the head reaches the target position. The reader
+        // always trails writePos by exactly targetLagFrames (to within one
+        // chunk), so the output delay is constant instead of creeping up.
         const uint32_t mask = RING_FRAMES - 1;
+        const int64_t targetHead = writePos - targetLagFrames;
         int chunksRead = 0;
-        const int MAX_CHUNKS_PER_WAKE = 16; // safety limit
+        // Safety limit only — the loop exits as soon as it reaches the read
+        // head. Sized to drain a full catch-up (a few ASIO buffers) even with
+        // the small 64-frame chunks; at 64 frames this covers ~340ms @48k.
+        const int MAX_CHUNKS_PER_WAKE = 256;
 
-        while (gap >= (int64_t)READ_CHUNK_FRAMES && chunksRead < MAX_CHUNKS_PER_WAKE) {
+        while (chunksRead < MAX_CHUNKS_PER_WAKE &&
+               s->localReadPos + (int64_t)READ_CHUNK_FRAMES <= targetHead) {
 
             for (uint32_t f = 0; f < READ_CHUNK_FRAMES; ++f) {
                 uint32_t     slot = (uint32_t)((s->localReadPos + f) & mask);
@@ -256,11 +290,34 @@ static DWORD WINAPI AudioThread(LPVOID param)
 
             obs_source_output_audio(s->obsSource, &frame);
 
+            // Diagnostic: track the peak actually handed to OBS so we can
+            // tell "capture works" apart from "OBS is playing it".
+            for (uint32_t f = 0; f < READ_CHUNK_FRAMES; ++f) {
+                float a = planeL[f] < 0.0f ? -planeL[f] : planeL[f];
+                float b = planeR[f] < 0.0f ? -planeR[f] : planeR[f];
+                if (a > s->diagPeak) s->diagPeak = a;
+                if (b > s->diagPeak) s->diagPeak = b;
+            }
+
             // Advance timestamp by exact sample duration — never drifts
             s->audioTimestamp += (uint64_t)READ_CHUNK_FRAMES * 1000000000ULL / sr;
 
-            gap -= READ_CHUNK_FRAMES;
             ++chunksRead;
+        }
+
+        // Emit a heartbeat every ~2 s: proves the reader keeps up and shows
+        // that timestamps now sit in the Unix-epoch range OBS expects.
+        const uint64_t nowNs = os_gettime_ns();
+        if (nowNs - s->diagLastLogNs > 2000000000ULL) {
+            s->diagLastLogNs = nowNs;
+            DAWLOG(LOG_INFO,
+                   "AudioThread: chunks=%d readPos=%lld writePos=%lld lag=%dms "
+                   "outPeak=%.6f ts=%llu now=%llu",
+                   chunksRead, (long long)s->localReadPos,
+                   (long long)writePos, s->captureLagMs, (double)s->diagPeak,
+                   (unsigned long long)s->audioTimestamp,
+                   (unsigned long long)nowNs);
+            s->diagPeak = 0.0f;
         }
     }
     return 0;
@@ -272,6 +329,91 @@ static DWORD WINAPI AudioThread(LPVOID param)
 
 static const char *daw_source_name(void *) { return "DAW Audio Capture (ASIO)"; }
 
+// ---------------------------------------------------------------------------
+// Monitoring
+// Exposes OBS source monitoring as a property so it can be switched without
+// digging through Advanced Audio Properties. Off is the default because the
+// intended monitoring path is the ASIO interface itself, at zero latency.
+// ---------------------------------------------------------------------------
+
+static void ApplyMonitoring(DAWSource *s)
+{
+    if (!s || !s->obsSource) return;
+
+    int mode = (int)obs_data_get_int(obs_source_get_settings(s->obsSource),
+                                     "monitor_mode");
+    if (mode < 0) mode = 0;
+    if (mode > 2) mode = 2;
+
+    obs_source_set_monitoring_type(s->obsSource,
+                                   (enum obs_monitoring_type)mode);
+    DAWLOG(LOG_INFO, "ApplyMonitoring: mode=%d", mode);
+}
+
+// ---------------------------------------------------------------------------
+// Monitoring device
+// OBS keeps the monitoring device as ONE global setting
+// (obs_set_audio_monitoring_device) - there is no per-source API - so this
+// source drives that global from its own properties. With the ASIO proxy
+// routing you normally listen through the interface, but when you do enable
+// monitoring you usually want a specific device (headphones) without digging
+// through Settings > Audio.
+// ---------------------------------------------------------------------------
+
+struct MonQuery {
+    bool            listing;    // true: fill a property list
+    obs_property_t *prop;
+    const char     *wantId;     // find mode: id to look up
+    char            foundName[256];
+    bool            found;
+};
+
+static bool mon_query_cb(void *data, const char *name, const char *id)
+{
+    auto *q = static_cast<MonQuery *>(data);
+    if (q->listing) {
+        obs_property_list_add_string(q->prop, name, id);
+        return true;
+    }
+    if (q->wantId && id && strcmp(id, q->wantId) == 0) {
+        size_t n = strlen(name);
+        if (n >= sizeof(q->foundName)) n = sizeof(q->foundName) - 1;
+        memcpy(q->foundName, name, n);
+        q->foundName[n] = '\0';
+        q->found = true;
+        return false;   // stop enumerating
+    }
+    return true;
+}
+
+static void ApplyMonitoringDevice(obs_data_t *settings)
+{
+    if (!settings) return;
+    if (!obs_audio_monitoring_available()) return;
+
+    const char *wantId = obs_data_get_string(settings, "monitoring_device_id");
+    if (!wantId || !wantId[0]) return;   // "(keep OBS default)"
+
+    const char *curName = nullptr, *curId = nullptr;
+    obs_get_audio_monitoring_device(&curName, &curId);
+    if (curId && strcmp(curId, wantId) == 0) return;   // already active
+
+    MonQuery q = {};
+    q.wantId = wantId;
+    obs_enum_audio_monitoring_devices(mon_query_cb, &q);
+
+    if (!q.found) {
+        DAWLOG(LOG_WARNING, "monitoring device id '%s' not found - not applied",
+               wantId);
+        return;
+    }
+    if (obs_set_audio_monitoring_device(q.foundName, wantId))
+        DAWLOG(LOG_INFO, "monitoring device set to '%s'", q.foundName);
+    else
+        DAWLOG(LOG_WARNING, "failed to set monitoring device '%s'",
+               q.foundName);
+}
+
 static void *daw_source_create(obs_data_t *settings, obs_source_t *source)
 {
     auto *s = new DAWSource{};
@@ -280,6 +422,9 @@ static void *daw_source_create(obs_data_t *settings, obs_source_t *source)
     OpenShm(s);
 
     s->outputPair = (int)obs_data_get_int(settings, "output_pair");
+    s->captureLagMs = (int)obs_data_get_int(settings, "capture_lag_ms");
+    ApplyMonitoring(s);
+    ApplyMonitoringDevice(settings);
 
     const char *clsidUtf8 = obs_data_get_string(settings, "driver_clsid");
     if (clsidUtf8 && clsidUtf8[0]) {
@@ -314,6 +459,8 @@ static void daw_source_update(void *data, obs_data_t *settings)
 {
     auto *s = static_cast<DAWSource*>(data);
     s->synced = false;
+    ApplyMonitoring(s);
+    ApplyMonitoringDevice(settings);
 
     const char *clsidUtf8 = obs_data_get_string(settings, "driver_clsid");
     if (!clsidUtf8 || !clsidUtf8[0]) {
@@ -322,7 +469,9 @@ static void daw_source_update(void *data, obs_data_t *settings)
     }
 
     s->outputPair = (int)obs_data_get_int(settings, "output_pair");
-    DAWLOG(LOG_INFO, "daw_source_update: CLSID = %s  pair=%d", clsidUtf8, s->outputPair);
+    s->captureLagMs = (int)obs_data_get_int(settings, "capture_lag_ms");
+    DAWLOG(LOG_INFO, "daw_source_update: CLSID = %s  pair=%d  lag=%dms",
+           clsidUtf8, s->outputPair, s->captureLagMs);
 
     wchar_t clsidW[64];
     MultiByteToWideChar(CP_UTF8, 0, clsidUtf8, -1, clsidW, 64);
@@ -381,6 +530,13 @@ static bool on_driver_changed(obs_properties_t *props, obs_property_t *,
     return true; // refresh properties display
 }
 
+static bool on_monitor_device_changed(obs_properties_t *, obs_property_t *,
+                                      obs_data_t *settings)
+{
+    ApplyMonitoringDevice(settings);
+    return false;   // nothing to re-render
+}
+
 static obs_properties_t *daw_source_get_properties(void *data)
 {
     obs_properties_t *props = obs_properties_create();
@@ -425,9 +581,72 @@ static obs_properties_t *daw_source_get_properties(void *data)
 
     obs_properties_add_text(props, "proxy_status", statusText, OBS_TEXT_INFO);
 
+    obs_property_t *lagProp = obs_properties_add_int(
+        props, "capture_lag_ms", "Capture lag (ms)",
+        0, 250, 1);
+    obs_property_int_set_suffix(lagProp, " ms");
+    obs_property_set_long_description(lagProp,
+        "How far behind the DAW's write head the OBS reader stays "
+        "(tape-style cushion). Lower = less latency. 0-20 ms is a good "
+        "low-latency range; increase only if you hear stutter/crackle.");
+
+    obs_property_t *monProp = obs_properties_add_list(
+        props, "monitor_mode", "Audio Monitoring",
+        OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+    obs_property_list_add_int(monProp, "Monitor Off", 0);
+    obs_property_list_add_int(monProp, "Monitor Only (headphones)", 1);
+    obs_property_list_add_int(monProp, "Monitor and Output", 2);
+    obs_property_set_long_description(monProp,
+        "Monitor Off = you monitor the DAW directly through the audio "
+        "interface at zero latency (recommended).\n"
+        "On = OBS additionally plays the captured copy on the monitoring "
+        "device chosen below, delayed by 'Capture lag'. That double-hears "
+        "the DAW and adds that delay, so only enable it if you deliberately "
+        "want to judge the OBS signal.");
+
+    // --- Monitoring device -------------------------------------------------
+    obs_property_t *monDev = obs_properties_add_list(
+        props, "monitoring_device_id", "Monitoring Device",
+        OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+    obs_property_list_add_string(monDev, "(keep OBS default)", "");
+
+    if (obs_audio_monitoring_available()) {
+        MonQuery q = {};
+        q.listing = true;
+        q.prop = monDev;
+        obs_enum_audio_monitoring_devices(mon_query_cb, &q);
+    } else {
+        obs_property_set_enabled(monDev, false);
+    }
+    obs_property_set_long_description(monDev,
+        "Which output device OBS plays the monitored copy on. With the ASIO "
+        "proxy routing you normally listen through the interface itself; pick "
+        "a device here only when you enable monitoring above.\n"
+        "OBS keeps this as ONE global setting, so it applies to every source "
+        "with monitoring enabled, not just this one.\n"
+        "Ignored while 'Audio Monitoring' is 'Monitor Off'.");
+    obs_property_set_modified_callback(monDev, on_monitor_device_changed);
+
+    {   // report what is actually active right now
+        const char *curName = nullptr, *curId = nullptr;
+        obs_get_audio_monitoring_device(&curName, &curId);
+        char monStatus[320];
+        if (obs_audio_monitoring_available() && curName && curName[0])
+            snprintf(monStatus, sizeof(monStatus),
+                     "Active OBS monitoring device: %s", curName);
+        else
+            snprintf(monStatus, sizeof(monStatus),
+                     "Active OBS monitoring device: (none - monitoring "
+                     "unavailable or not set)");
+        obs_properties_add_text(props, "monitor_status", monStatus,
+                                OBS_TEXT_INFO);
+    }
+
     obs_properties_add_text(props, "info",
         "Start OBS first, select your ASIO driver, then start your DAW.\n"
-        "Set Audio Monitoring to 'Monitor Off' so only the stream hears it.",
+        "Keep 'Audio Monitoring' on Monitor Off: you already monitor the "
+        "DAW at zero latency through the interface.\n"
+        "Lower 'Capture lag' for minimum latency; raise it if audio stutters.",
         OBS_TEXT_INFO);
 
     return props;
@@ -437,6 +656,9 @@ static void daw_source_get_defaults(obs_data_t *settings)
 {
     obs_data_set_default_string(settings, "driver_clsid", "");
     obs_data_set_default_int(settings, "output_pair", 0);
+    obs_data_set_default_int(settings, "capture_lag_ms", 4);
+    obs_data_set_default_int(settings, "monitor_mode", 0);
+    obs_data_set_default_string(settings, "monitoring_device_id", "");
 }
 
 // ---------------------------------------------------------------------------

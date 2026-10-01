@@ -477,20 +477,20 @@ void ProxyASIODriver::closeSharedMemory()
 // ---------------------------------------------------------------------------
 
 namespace ProxyTrampoline {
-    void CALLBACK bufferSwitch(long index, ASIOBool direct) {
+    void bufferSwitch(long index, ASIOBool direct) {
         if (ProxyASIODriver::instance())
             ProxyASIODriver::instance()->onBufferSwitch(index, direct);
     }
-    ASIOTime *CALLBACK bufferSwitchTimeInfo(ASIOTime *t, long index, ASIOBool direct) {
+    ASIOTime *bufferSwitchTimeInfo(ASIOTime *t, long index, ASIOBool direct) {
         if (ProxyASIODriver::instance())
             return ProxyASIODriver::instance()->onBufferSwitchTimeInfo(t, index, direct);
         return t;
     }
-    void CALLBACK sampleRateChanged(ASIOSampleRate sr) {
+    void sampleRateChanged(ASIOSampleRate sr) {
         if (ProxyASIODriver::instance())
             ProxyASIODriver::instance()->onSampleRateChanged(sr);
     }
-    long CALLBACK asioMessage(long sel, long val, void *msg, double *opt) {
+    long asioMessage(long sel, long val, void *msg, double *opt) {
         if (ProxyASIODriver::instance())
             return ProxyASIODriver::instance()->onAsioMessage(sel, val, msg, opt);
         return 0;
