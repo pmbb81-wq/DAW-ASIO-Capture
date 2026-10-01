@@ -5,13 +5,43 @@ Capture your DAW's ASIO output directly into OBS as a separate audio source. No 
 > **This fork (`pmbb81-wq/DAW-ASIO-Capture`)** is a low-latency build of the original
 > [`emersound/DAW-ASIO-Capture`](https://github.com/emersound/DAW-ASIO-Capture).
 > The capture delay is configurable per source and defaults to a single-digit
-> millisecond cushion instead of the original fixed ~40 ms, the reader wakes on
-> an event instead of polling, and a **direct-monitoring** path lets the proxy
-> play the ASIO output straight to your headphones without any extra process.
+> millisecond cushion instead of the original fixed ~40 ms, and the reader wakes
+> on an event instead of polling, so the OBS copy sits much closer to what you
+> hear. The proxy also carries the groundwork for zero-extra-process
+> **direct monitoring** (see `shared/direct-monitor.cpp`).
 > See [Fork changes](#fork-changes) for the full list. Original MIT work by
 > Monte Emerson; this fork keeps the same MIT license.
 
 Built for musicians who stream live production sessions and need their DAW audio in OBS without interfering with their low-latency ASIO monitoring.
+
+## Quick Start (prebuilt binaries)
+
+**Download:** grab the latest ZIP from the [Releases page](https://github.com/pmbb81-wq/DAW-ASIO-Capture/releases/latest).
+
+**What you need:** Windows 10/11 (64-bit), [OBS Studio 28+](https://obsproject.com/) (64-bit), an ASIO audio interface with its driver installed, and your DAW.
+
+1. Close **OBS** and your **DAW**.
+2. Unzip the release. You should see `install.bat`, `uninstall.bat`, `obs-daw-capture.dll` and `asio-proxy.dll`.
+3. Right-click **`install.bat`** → **Run as administrator**. This copies both DLLs into OBS. No audio driver is touched yet.
+4. Start **OBS**.
+5. In **Sources**, click **+** → **DAW Audio Capture (ASIO)**.
+6. Pick your **ASIO driver** (e.g. `Focusrite USB ASIO`) and your **Output Pair** (usually `Out 1-2`), then click **OK**. A **UAC prompt** appears — click **Yes** (one-time; this points your ASIO driver through the proxy).
+7. Right-click the source → **Advanced Audio Properties** → set **Audio Monitoring** to **Monitor Off** (you keep hearing the DAW through your interface, not OBS).
+8. Start your **DAW**. It loads through the proxy transparently — the OBS meter starts moving.
+
+**Order matters: OBS first, DAW second.** To shut down, close the **DAW first**, then **OBS**, so the ASIO driver is restored cleanly. If OBS ever crashes, run **`uninstall.bat`** as administrator to restore your driver.
+
+## What to set, and when
+
+| Setting | Where | Suggested value |
+|---------|-------|-----------------|
+| ASIO driver | OBS → source Properties | your interface's ASIO driver |
+| Output pair | OBS → source Properties | `Out 1-2` (your DAW's master) |
+| **Capture lag (ms)** | OBS → source Properties | **4** (default). Raise to 8-10 if you hear crackles; lower toward 2 for the tightest sync |
+| Audio Monitoring | OBS → Advanced Audio Properties | **Monitor Off** |
+| ASIO buffer size | your DAW's audio settings | 128-256 samples for low monitoring latency |
+
+`Capture lag (ms)` is **not** an extra buffer — it is how far *behind* the live edge the OBS reader sits. Smaller = tighter sync in OBS; larger = safer against dropouts. The hard floor is about 1.3 ms (the 64-frame read chunk), so 4 ms is a comfortable default.
 
 ## About
 
